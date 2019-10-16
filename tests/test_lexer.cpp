@@ -5,7 +5,6 @@
 #include "lexer.h"
 #include "gtest/gtest.h"
 
-class LexerTest : public ::test
 TEST(LexerTest, canParseIdentifier) {
     auto in = std::istringstream("this_is_an_identifier");
     Lexer lex(&in);

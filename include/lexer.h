@@ -2,59 +2,7 @@
 
 #include <string>
 #include <array>
-
-enum TokenType {
-  ERROR, END_OF_FILE, SEP, 
-  NUMBER, STRING, IDENT, 
-  EQUAL, PLUS, L_PAREN, R_PAREN
-};
-
-const std::array<std::string, 100> kTokenTypeNames = {{
-  "ERROR", "END_OF_FILE", "SEP",
-  "NUMBER", "STRING", "IDENT",
-  "EQUAL", "PLUS", "L_PAREN", "R_PAREN"
-}};
-
-class Token {
-    const TokenType type_;
-    const size_t line_;
-    const size_t start_;
-    std::string value_;
-  public:
-    Token(TokenType t, size_t l, size_t s) :
-      type_(t), line_(l), start_(s) {}
-
-    Token(TokenType t, size_t l, size_t s, std::string v) :
-      type_(t), line_(l), start_(s), value_(std::move(v)) {}
-
-    [[nodiscard]] const std::string& name() const {
-      return kTokenTypeNames[type_];
-    }
-
-    [[nodiscard]] bool hasValue() const {
-      return type_ == NUMBER || type_ == IDENT || type_ == STRING;
-    }
-
-    [[nodiscard]] TokenType type() const {
-      return type_;
-    }
-
-    [[nodiscard]] size_t line() const {
-      return line_;
-    }
-
-    [[nodiscard]] size_t start() const {
-      return start_;
-    }
-
-    const std::string& value() {
-      return value_;
-    }
-
-    void push_back(char c) {
-      value_ += c;
-    }
-};
+#include "token.h"
 
 class Lexer {
     std::istream *stream_;
@@ -120,9 +68,18 @@ class Lexer {
 
     Token numberLiteral() {
       auto token = createToken(NUMBER);
+      auto seenDot = false;
       while(isdigit(peeked_)) {
         token.push_back(peeked_);
         advance();
+        if (peeked_ == '.') {
+          if (seenDot) {
+            return fail("You can't use the dot operator on a number");
+          }
+          token.push_back(peeked_);
+          advance();
+          seenDot = true;
+        }
       }
       return token;
     }
@@ -144,21 +101,84 @@ class Lexer {
         peeked_(-1) {}
 
   Token getToken() {
+    
     peeked_ = stream_->peek();
     ignoreWhitespace();
     ignoreComments();
 
+    // TODO: refactor this. A lot of duplicate code for handling single chars tokens
     switch(peeked_) {
       case EOF:
         return createToken(END_OF_FILE);
       case '\n':
         return endOfLine();
-      case '=':
-        advance();
-        return createToken(EQUAL);
       case '+':
         advance();
         return createToken(PLUS);
+      case '-':
+        advance();
+        return createToken(MINUS);
+      case '*':
+        advance();
+        return createToken(STAR);
+      case '/':
+        advance();
+        return createToken(SLASH);
+      case '!':
+        advance();
+        if (peeked_ == '=') {
+          advance();
+          return createToken(NOT_EQUAL);
+        }
+        return createToken(NEGATE);
+      case '=':
+        advance();
+        if (peeked_ == '=') {
+          advance();
+          return createToken(EQUALS);
+        }
+        return createToken(ASSIGN);
+      case '>':
+        advance();
+        if (peeked_ == '=') {
+          advance();
+          return createToken(G_EQUAL);
+        }
+        return createToken(GREATER);
+      case '<':
+        advance();
+        if (peeked_ == '=') {
+          advance();
+          return createToken(L_EQUAL);
+        }
+        return createToken(LESS);
+      case '(':
+        advance();
+        return createToken(L_PAREN);
+      case ')':
+        advance();
+        return createToken(R_PAREN);
+      case '{':
+        advance();
+        return createToken(L_BRACE);
+      case '}':
+        advance();
+        return createToken(R_BRACE);
+      case '[':
+        advance();
+        return createToken(L_BRACKET);
+      case ']':
+        advance();
+        return createToken(R_BRACKET);
+      case ',':
+        advance();
+        return createToken(COMMA);
+      case '.':
+        advance();
+        return createToken(DOT);
+      case ':':
+        advance();
+        return createToken(COLON);
       case '0'...'9':
         return numberLiteral();
       case 'a'...'z':

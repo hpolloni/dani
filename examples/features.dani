@@ -1,0 +1,42 @@
+# Comments start with # and go all the way to the end of line or end of file
+
+let a = 1 + 2 # this is a declaration
+print(a) # this is a function call 
+
+# it has numbers. All numbers are represented internally by IEEE754 double precision
+let pi = 3.14
+let radius = 42
+let area_of_a_circle = pi*r*r
+
+# it has strings.
+let hello = "Hello "
+let world = 'World'
+print(hello + " " + world)
+
+# it also has lists.
+let hellos = ["Hola", "Hello", "Bonjour"]
+
+# lists can be iterated using the for_each function
+hellos.for_each(fun(h) {
+  if (h != "Hola") {
+    print(h)
+  }
+})
+
+# it also has dictionaries.
+let greeter = object {
+  greeting: "Hello"
+}
+
+# and finally, it has functions.
+let greet = fun(self, name) {
+  print(self.greeting + ", " + name)
+}
+
+# You now can use.
+greet(greeter, "John") # Hello, John
+
+# You could use the '.' operator instead.
+greeter.greet("Joe") # Hello, Joe
+
+# and that's it. 
