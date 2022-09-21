@@ -87,14 +87,6 @@ fn main() {
     let mut current_plugin = load_plugin("default");
     let mut buffer = vec![];
 
-    let mut builder = tabled::builder::Builder::default();
-    builder.set_columns(["col0", "col1"]);
-    builder.add_record(["1","2"]);
-    builder.add_record(["3","4"]);
-    
-    let table = builder.build().with(tabled::Style::psql());
-
-    println!("{}", table);
     loop {
         let result_line = rl.readline(prompt);
         match result_line {
