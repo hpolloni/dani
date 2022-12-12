@@ -1,6 +1,0 @@
-[default]
-type='rdsdata'
-cluster_arn='arn:aws:rds:us-east-1:<ACCOUNT_ID>:cluster:<CLUSTER_NAME>'
-secret_arn='arn:aws:secretsmanager:us-east-1:<ACCOUNT_ID>:secret:<SECRET_ID>'
-database='DATABASE_NAME'
-awsprofile='default'

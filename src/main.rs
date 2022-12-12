@@ -1,17 +1,17 @@
-mod plugin;
-
-use std::fs;
-use std::process::exit;
-use toml;
+use std::borrow::Cow::{self, Borrowed, Owned};
+use std::{process::exit, fmt::Display};
 use env_logger::{Env, Builder};
-use expanduser::expanduser;
 use log::debug;
-use plugin::Plugin;
-use rustyline::Editor;
+use rustyline::config::Configurer;
 use rustyline::error::ReadlineError;
+use sqlx::{SqliteConnection, Connection, Row, sqlite::SqliteRow, Column};
 
-use crate::plugin::NullPlugin;
-use crate::plugin::RdsDataPlugin;
+use rustyline::completion::FilenameCompleter;
+use rustyline::highlight::{Highlighter, MatchingBracketHighlighter};
+use rustyline::hint::HistoryHinter;
+use rustyline::validate::MatchingBracketValidator;
+use rustyline::{Cmd, CompletionType, Config, EditMode, Editor, KeyEvent};
+use rustyline_derive::{Completer, Helper, Hinter, Validator};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
@@ -23,7 +23,6 @@ fn show_welcome_msg() {
 fn show_help() {
     println!(".help              Shows this help information.");
     println!(".quit              Quits the application.");
-    println!(".profile <PROFILE> Choose a new profile to use.");
 }
 
 fn initialize_logger() {
@@ -34,7 +33,7 @@ fn initialize_logger() {
     builder.init();
 }
 
-fn handle_command(current_plugin: Box<dyn Plugin>, line: String) -> Box<dyn Plugin> {
+fn handle_command(line: String) {
     if line == ".help" {
         show_help();
     }
@@ -42,71 +41,143 @@ fn handle_command(current_plugin: Box<dyn Plugin>, line: String) -> Box<dyn Plug
     if line == ".quit" {
         exit(0);
     }
-
-    return current_plugin;
 }
 
-fn load_plugin(profile: &str) -> Box<dyn Plugin> {
-    debug!("Loading profile.");
-    let path = expanduser("~/.dani").unwrap();
-    if !path.exists() {
-        eprintln!("~/.dani not found. Defaulting to no settings.");
-        return Box::new(NullPlugin{});
-    }
-    let contents = match fs::read_to_string(path) {
-        Ok(c) => c,
-        Err(_) => {eprintln!("Failed to read ~/.dani file"); exit(1);}
-    };
-    let value: toml::Value = match toml::from_str(&contents) {
-        Ok(v) => v,
-        Err(_) => {eprintln!("Failed to parse ~/.dani file"); exit(2); }
-    };
-
-    if !&value.as_table().unwrap().contains_key(profile) {
-        eprintln!("Profile {} not found in ~/.dani file. Defaulting to no settings.", profile);
-        return Box::new(NullPlugin{});
-    }
-
-    // TODO: Unwrap everywhere :(
-    let settings = value.as_table().unwrap()[profile].as_table().unwrap();
-    let cluster_arn = settings["cluster_arn"].as_str().unwrap();
-    let secret_arn = settings["secret_arn"].as_str().unwrap();
-    let database = settings["database"].as_str().unwrap();
-    let awsprofile = settings["awsprofile"].as_str().unwrap();
-
-    return Box::new(RdsDataPlugin::new(cluster_arn, secret_arn, database, awsprofile));
+#[derive(Default)]
+struct ResultSet {
+    headers: Vec<String>,
+    rows: Vec<Vec<String>>
 }
 
-fn main() {
-    initialize_logger();
-    let default_prompt = ">> ";
+impl From<Vec<SqliteRow>> for ResultSet {
+    fn from(rows: Vec<SqliteRow>) -> Self {
+        if rows.is_empty() {
+            return Self::default()
+        }
+        let result_set_rows = rows.iter().map(|sql_row| {
+            let mut row = vec![];
+            for i in 0..sql_row.columns().len() {
+                row.push(sql_row.get(i));
+            }
+            row
+        }).collect();
+
+        Self {
+            headers: rows[0].columns().iter().map(|col| { col.name().to_owned() }).collect(),
+            rows: result_set_rows
+        }
+    }
+}
+
+impl Display for ResultSet {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let mut builder = tabled::builder::Builder::default();
+    
+        builder.set_columns(&self.headers);
+        for row in self.rows.iter() {
+            builder.add_record(row);
+        }
+    
+        let table = builder.build().with(tabled::Style::psql());
+
+        write!(f, "{}", table)
+    }
+}
+
+
+#[derive(Helper, Completer, Hinter, Validator)]
+struct MyHelper {
+    highlighter: MatchingBracketHighlighter,
+    #[rustyline(Hinter)]
+    hinter: HistoryHinter,
+    colored_prompt: String,
+}
+
+impl Highlighter for MyHelper {
+    fn highlight_prompt<'b, 's: 'b, 'p: 'b>(
+        &'s self,
+        prompt: &'p str,
+        default: bool,
+    ) -> Cow<'b, str> {
+        if default {
+            Borrowed(&self.colored_prompt)
+        } else {
+            Borrowed(prompt)
+        }
+    }
+
+    fn highlight_hint<'h>(&self, hint: &'h str) -> Cow<'h, str> {
+        Owned("\x1b[1m".to_owned() + hint + "\x1b[m")
+    }
+
+    fn highlight<'l>(&self, line: &'l str, pos: usize) -> Cow<'l, str> {
+        self.highlighter.highlight(line, pos)
+    }
+
+    fn highlight_char(&self, line: &str, pos: usize) -> bool {
+        self.highlighter.highlight_char(line, pos)
+    }
+}
+
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let default_prompt = ">>> ";
     let mut prompt = default_prompt;
+    initialize_logger();
     show_welcome_msg();
-    let mut rl = Editor::<()>::new().unwrap();
 
-    let mut current_plugin = load_plugin("default");
+     let config = Config::builder()
+        .history_ignore_space(true)
+        .completion_type(CompletionType::List)
+        .edit_mode(EditMode::Vi)
+        .build();
+
+    let h = MyHelper {
+        highlighter: MatchingBracketHighlighter::new(),
+        hinter: HistoryHinter {},
+        colored_prompt: "".to_owned(),
+    };
+
+    let mut rl = Editor::with_config(config)?;
+    rl.set_helper(Some(h));
+    if rl.load_history("history.txt").is_err() {
+        println!("No previous history.");
+    }
     let mut buffer = vec![];
 
+    let mut conn = SqliteConnection::connect("sqlite::memory:").await?;
     loop {
+        rl.helper_mut().expect("No helper").colored_prompt = format!("\x1b[1;32m{prompt}\x1b[0m");
         let result_line = rl.readline(prompt);
         match result_line {
             Ok(line) => {
                 rl.add_history_entry(line.as_str());
 
                 if !line.is_empty() && line.starts_with(".") {
-                    current_plugin = handle_command(current_plugin, line);
+                    handle_command(line);
                 } else if line.is_empty() || line.ends_with(";") {
                     buffer.push(line);
-                    debug!("Executing: {}", buffer.join("\n"));
-                    println!("{}", current_plugin.execute(&buffer.join("\n")));
+                    let query = buffer.join("\n");
+                    debug!("Executing: {}", query);
 
+                    // TODO: sqlx permits streaming result sets. So we could do
+                    // asynchronous fetching of results
+                    let rows = sqlx::query(&query)
+                        .fetch_all(&mut conn).await;
+                    if let Ok(rows) = rows {
+                        let result_set = ResultSet::from(rows);
+
+                        println!("{}", result_set);
+
+                        println!("executed successfully. ");
+                    }
                     buffer = vec![];
                     prompt = default_prompt;
                 } else {
                     buffer.push(line);
                     prompt = "|  "; 
                 }
-                
             },
             Err(ReadlineError::Interrupted) | Err(ReadlineError::Eof) => {
                 debug!("Interrupted!");
@@ -118,5 +189,7 @@ fn main() {
             }
         }
     }
+    rl.append_history("history.txt")?;
+    Ok(())
 }
 
